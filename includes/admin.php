@@ -1,8 +1,11 @@
 <?php
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 if ( ! defined( 'WPINC' ) ) {
     die;
 }
+
+const ELK_301_MIGRATOR_IMPORT_MAX_BYTES = 5242880;
 
 add_action( 'admin_menu', function () {
     add_management_page(
@@ -83,21 +86,45 @@ function elk_301_migrator_handle_import(): void {
     check_admin_referer( 'elk_301_migrator_import' );
 
     $redirect_base = [ 'page' => 'elk-301-migrator' ];
+    $file          = $_FILES['import_file'] ?? [];
 
-    if ( empty( $_FILES['import_file']['tmp_name'] ) || ! is_uploaded_file( $_FILES['import_file']['tmp_name'] ) ) {
+    if ( ! is_array( $file ) ) {
         wp_safe_redirect( add_query_arg( array_merge( $redirect_base, [ 'import_error' => 'no_file' ] ), admin_url( 'tools.php' ) ) );
         exit;
     }
 
-    if ( ! empty( $_FILES['import_file']['error'] ) ) {
+    $upload_error = isset( $file['error'] ) && is_scalar( $file['error'] ) ? (int) $file['error'] : UPLOAD_ERR_NO_FILE;
+    if ( $upload_error === UPLOAD_ERR_NO_FILE ) {
+        wp_safe_redirect( add_query_arg( array_merge( $redirect_base, [ 'import_error' => 'no_file' ] ), admin_url( 'tools.php' ) ) );
+        exit;
+    }
+
+    if ( $upload_error !== UPLOAD_ERR_OK ) {
         wp_safe_redirect( add_query_arg( array_merge( $redirect_base, [ 'import_error' => 'upload' ] ), admin_url( 'tools.php' ) ) );
         exit;
     }
 
-    $raw     = file_get_contents( $_FILES['import_file']['tmp_name'] );
+    if ( empty( $file['tmp_name'] ) || ! is_string( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) || ! is_readable( $file['tmp_name'] ) ) {
+        wp_safe_redirect( add_query_arg( array_merge( $redirect_base, [ 'import_error' => 'read_failed' ] ), admin_url( 'tools.php' ) ) );
+        exit;
+    }
+
+    $fallback_size = filesize( $file['tmp_name'] );
+    $file_size     = isset( $file['size'] ) && is_scalar( $file['size'] ) ? (int) $file['size'] : (int) $fallback_size;
+    if ( $file_size > ELK_301_MIGRATOR_IMPORT_MAX_BYTES ) {
+        wp_safe_redirect( add_query_arg( array_merge( $redirect_base, [ 'import_error' => 'too_large' ] ), admin_url( 'tools.php' ) ) );
+        exit;
+    }
+
+    $raw = file_get_contents( $file['tmp_name'] );
+    if ( $raw === false ) {
+        wp_safe_redirect( add_query_arg( array_merge( $redirect_base, [ 'import_error' => 'read_failed' ] ), admin_url( 'tools.php' ) ) );
+        exit;
+    }
+
     $decoded = json_decode( (string) $raw, true );
 
-    if ( ! is_array( $decoded ) ) {
+    if ( json_last_error() !== JSON_ERROR_NONE || ! is_array( $decoded ) ) {
         wp_safe_redirect( add_query_arg( array_merge( $redirect_base, [ 'import_error' => 'invalid_json' ] ), admin_url( 'tools.php' ) ) );
         exit;
     }
@@ -108,19 +135,7 @@ function elk_301_migrator_handle_import(): void {
         exit;
     }
 
-    $source_lookup = [];
-    foreach ( $scan['groups'] as $items ) {
-        foreach ( $items as $item ) {
-            $rel                                       = elk_301_migrator_to_relative( $item['url'] );
-            $source_lookup[ $rel ]                     = $item['url'];
-            $source_lookup[ rawurldecode( $rel ) ]     = $item['url'];
-            $source_lookup[ $item['url'] ]             = $item['url'];
-            $encoded                                   = esc_url_raw( $item['url'] );
-            if ( $encoded !== '' ) {
-                $source_lookup[ $encoded ]             = $item['url'];
-            }
-        }
-    }
+    $source_lookup = elk_301_migrator_build_url_index( $scan['groups'] );
 
     $overwrite   = ! empty( $_POST['overwrite'] );
     $current     = elk_301_migrator_get_targets();
@@ -183,9 +198,15 @@ function elk_301_migrator_sanitize_month( $value ): string {
     if ( $value === '' ) {
         return '';
     }
-    if ( preg_match( '/^\d{4}-\d{2}(-\d{2})?$/', $value ) ) {
+
+    if ( preg_match( '/^(\d{4})-(\d{2})$/', $value, $matches ) && checkdate( (int) $matches[2], 1, (int) $matches[1] ) ) {
         return $value;
     }
+
+    if ( preg_match( '/^(\d{4})-(\d{2})-(\d{2})$/', $value, $matches ) && checkdate( (int) $matches[2], (int) $matches[3], (int) $matches[1] ) ) {
+        return $value;
+    }
+
     return '';
 }
 
@@ -232,8 +253,6 @@ function elk_301_migrator_render_page(): void {
     ];
 
     $post_url   = admin_url( 'admin-post.php' );
-    $scan_nonce = wp_create_nonce( 'elk_301_migrator_scan' );
-    $save_nonce = wp_create_nonce( 'elk_301_migrator_save_targets' );
     $export_nonce = wp_create_nonce( 'elk_301_migrator_export' );
 
     $total       = 0;
@@ -282,7 +301,7 @@ function elk_301_migrator_render_page(): void {
         <?php if ( isset( $_GET['imported'] ) ) : ?>
             <div class="notice notice-success is-dismissible">
                 <p><?php printf(
-                    esc_html__( 'Import: %1$d saved out of %2$d rows — %3$d matched, %4$d unmatched source, %5$d empty target, %6$d skipped (target already set).', 'elk-301-migrator' ),
+                    esc_html__( 'Import: %1$d saved out of %2$d rows - %3$d matched, %4$d unmatched source, %5$d empty target, %6$d skipped (target already set).', 'elk-301-migrator' ),
                     (int) $_GET['imported'],
                     isset( $_GET['total'] ) ? (int) $_GET['total'] : 0,
                     isset( $_GET['matched'] ) ? (int) $_GET['matched'] : 0,
@@ -297,6 +316,8 @@ function elk_301_migrator_render_page(): void {
             $messages = [
                 'no_file'       => __( 'No file selected.', 'elk-301-migrator' ),
                 'upload'        => __( 'Upload failed.', 'elk-301-migrator' ),
+                'too_large'     => __( 'Import file is too large. Maximum size is 5 MB.', 'elk-301-migrator' ),
+                'read_failed'   => __( 'Could not read the uploaded file.', 'elk-301-migrator' ),
                 'invalid_json'  => __( 'File is not valid JSON.', 'elk-301-migrator' ),
                 'no_scan'       => __( 'Run a scan before importing.', 'elk-301-migrator' ),
                 'empty_payload' => __( 'The JSON file contained no valid entries (expected an array of objects with a "source" key).', 'elk-301-migrator' ),
@@ -457,7 +478,7 @@ function elk_301_migrator_render_page(): void {
 
             <p>
                 <button type="submit" class="button button-primary"><?php esc_html_e( 'Save targets', 'elk-301-migrator' ); ?></button>
-                <span class="description" style="margin-left:1em;"><?php esc_html_e( 'Only rows you actually edit are submitted — safe for large sites.', 'elk-301-migrator' ); ?></span>
+                <span class="description" style="margin-left:1em;"><?php esc_html_e( 'Only rows you actually edit are submitted - safe for large sites.', 'elk-301-migrator' ); ?></span>
             </p>
 
             <?php foreach ( $group_labels as $key => $heading ) :
@@ -465,7 +486,7 @@ function elk_301_migrator_render_page(): void {
                     continue;
                 }
                 ?>
-                <h3><?php echo esc_html( $heading ); ?> <span class="count">(<?php echo count( $scan['groups'][ $key ] ); ?>)</span></h3>
+                <h3><?php echo esc_html( $heading ); ?> <span class="count">(<?php echo esc_html( (string) count( $scan['groups'][ $key ] ) ); ?>)</span></h3>
                 <table class="widefat striped">
                     <thead>
                         <tr>
@@ -517,7 +538,7 @@ function elk_301_migrator_render_page(): void {
             var form = document.getElementById('elk-301-targets-form');
             if (!form) { return; }
 
-            var homeUrl = <?php echo wp_json_encode( home_url() ); ?>;
+            var homeUrl = <?php echo wp_json_encode( home_url(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT ); ?>;
 
             function strip(str) { return str.replace(/\/+$/, ''); }
 

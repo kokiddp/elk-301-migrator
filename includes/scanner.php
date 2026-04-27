@@ -1,4 +1,5 @@
 <?php
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 if ( ! defined( 'WPINC' ) ) {
     die;
@@ -6,6 +7,7 @@ if ( ! defined( 'WPINC' ) ) {
 
 const ELK_301_MIGRATOR_SCAN_OPTION    = 'elk_301_migrator_scan';
 const ELK_301_MIGRATOR_TARGETS_OPTION = 'elk_301_migrator_targets';
+const ELK_301_MIGRATOR_SCAN_BATCH     = 500;
 
 /**
  * Collect every public URL on the site grouped by source type.
@@ -49,28 +51,37 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
             continue;
         }
 
-        $query = new WP_Query( [
-            'post_type'              => $post_type->name,
-            'post_status'            => 'publish',
-            'posts_per_page'         => -1,
-            'no_found_rows'          => true,
-            'update_post_meta_cache' => false,
-            'update_post_term_cache' => false,
-            'fields'                 => 'ids',
-        ] );
+        $page = 1;
+        do {
+            $query = new WP_Query( [
+                'post_type'              => $post_type->name,
+                'post_status'            => 'publish',
+                'posts_per_page'         => ELK_301_MIGRATOR_SCAN_BATCH,
+                'paged'                  => $page,
+                'orderby'                => 'ID',
+                'order'                  => 'ASC',
+                'ignore_sticky_posts'    => true,
+                'no_found_rows'          => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+                'fields'                 => 'ids',
+            ] );
 
-        foreach ( $query->posts as $post_id ) {
-            $permalink = get_permalink( $post_id );
-            if ( ! $permalink ) {
-                continue;
+            foreach ( $query->posts as $post_id ) {
+                $permalink = get_permalink( $post_id );
+                if ( ! $permalink ) {
+                    continue;
+                }
+
+                $groups['post_types'][] = [
+                    'url'   => $permalink,
+                    'label' => sprintf( '[%s] %s', $post_type->labels->singular_name, get_the_title( $post_id ) ),
+                    'type'  => 'post:' . $post_type->name,
+                ];
             }
 
-            $groups['post_types'][] = [
-                'url'   => $permalink,
-                'label' => sprintf( '[%s] %s', $post_type->labels->singular_name, get_the_title( $post_id ) ),
-                'type'  => 'post:' . $post_type->name,
-            ];
-        }
+            $page++;
+        } while ( count( $query->posts ) === ELK_301_MIGRATOR_SCAN_BATCH );
 
         if ( $post_type->has_archive && $post_type->name !== 'post' ) {
             $archive_link = get_post_type_archive_link( $post_type->name );
@@ -87,27 +98,36 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
     $taxonomies = get_taxonomies( [ 'public' => true ], 'objects' );
 
     foreach ( $taxonomies as $taxonomy ) {
-        $terms = get_terms( [
-            'taxonomy'   => $taxonomy->name,
-            'hide_empty' => false,
-        ] );
+        $offset = 0;
+        do {
+            $terms = get_terms( [
+                'taxonomy'   => $taxonomy->name,
+                'hide_empty' => false,
+                'number'     => ELK_301_MIGRATOR_SCAN_BATCH,
+                'offset'     => $offset,
+                'orderby'    => 'term_id',
+                'order'      => 'ASC',
+            ] );
 
-        if ( is_wp_error( $terms ) ) {
-            continue;
-        }
-
-        foreach ( $terms as $term ) {
-            $term_link = get_term_link( $term );
-            if ( is_wp_error( $term_link ) || ! $term_link ) {
-                continue;
+            if ( is_wp_error( $terms ) ) {
+                continue 2;
             }
 
-            $groups['taxonomies'][] = [
-                'url'   => $term_link,
-                'label' => sprintf( '[%s] %s', $taxonomy->labels->singular_name, $term->name ),
-                'type'  => 'term:' . $taxonomy->name,
-            ];
-        }
+            foreach ( $terms as $term ) {
+                $term_link = get_term_link( $term );
+                if ( is_wp_error( $term_link ) || ! $term_link ) {
+                    continue;
+                }
+
+                $groups['taxonomies'][] = [
+                    'url'   => $term_link,
+                    'label' => sprintf( '[%s] %s', $taxonomy->labels->singular_name, $term->name ),
+                    'type'  => 'term:' . $taxonomy->name,
+                ];
+            }
+
+            $offset += ELK_301_MIGRATOR_SCAN_BATCH;
+        } while ( count( $terms ) === ELK_301_MIGRATOR_SCAN_BATCH );
     }
 
     $authors = get_users( [
@@ -147,24 +167,25 @@ function elk_301_migrator_collect_attachments( array $filters ): array {
     $args = [
         'post_type'              => 'attachment',
         'post_status'            => 'inherit',
-        'posts_per_page'         => -1,
+        'posts_per_page'         => ELK_301_MIGRATOR_SCAN_BATCH,
         'no_found_rows'          => true,
         'update_post_meta_cache' => false,
         'update_post_term_cache' => false,
         'fields'                 => 'ids',
+        'orderby'                => 'ID',
+        'order'                  => 'ASC',
     ];
 
     $after  = $filters['attachment_after']  ?? '';
     $before = $filters['attachment_before'] ?? '';
 
     if ( $after !== '' || $before !== '' ) {
-        $date_query = [];
+        $date_query = [ 'inclusive' => true ];
         if ( $after !== '' ) {
-            $date_query['after'] = $after;
+            $date_query['after'] = elk_301_migrator_date_bound( $after, 'start' );
         }
         if ( $before !== '' ) {
-            $date_query['before']    = $before;
-            $date_query['inclusive'] = true;
+            $date_query['before'] = elk_301_migrator_date_bound( $before, 'end' );
         }
         $args['date_query'] = [ $date_query ];
     }
@@ -190,31 +211,54 @@ function elk_301_migrator_collect_attachments( array $filters ): array {
         }
     }
 
-    $query  = new WP_Query( $args );
+    $page   = 1;
     $result = [];
 
-    foreach ( $query->posts as $attachment_id ) {
-        $attachment_url = wp_get_attachment_url( $attachment_id );
-        if ( ! $attachment_url ) {
-            continue;
-        }
+    do {
+        $args['paged'] = $page;
+        $query         = new WP_Query( $args );
 
-        if ( $extensions ) {
-            $path      = wp_parse_url( $attachment_url, PHP_URL_PATH ) ?: '';
-            $extension = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
-            if ( ! in_array( $extension, $extensions, true ) ) {
+        foreach ( $query->posts as $attachment_id ) {
+            $attachment_url = wp_get_attachment_url( $attachment_id );
+            if ( ! $attachment_url ) {
                 continue;
             }
+
+            if ( $extensions ) {
+                $path      = wp_parse_url( $attachment_url, PHP_URL_PATH ) ?: '';
+                $extension = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
+                if ( ! in_array( $extension, $extensions, true ) ) {
+                    continue;
+                }
+            }
+
+            $result[] = [
+                'url'   => $attachment_url,
+                'label' => get_the_title( $attachment_id ),
+                'type'  => 'attachment',
+            ];
         }
 
-        $result[] = [
-            'url'   => $attachment_url,
-            'label' => get_the_title( $attachment_id ),
-            'type'  => 'attachment',
-        ];
-    }
+        $page++;
+    } while ( count( $query->posts ) === ELK_301_MIGRATOR_SCAN_BATCH );
 
     return $result;
+}
+
+function elk_301_migrator_date_bound( string $value, string $bound ): string {
+    if ( preg_match( '/^\d{4}-\d{2}$/', $value ) ) {
+        $date = DateTimeImmutable::createFromFormat( '!Y-m-d', $value . '-01' );
+        if ( $date instanceof DateTimeImmutable && $bound === 'end' ) {
+            return $date->modify( 'last day of this month' )->format( 'Y-m-d 23:59:59' );
+        }
+        return $value . '-01 00:00:00';
+    }
+
+    if ( $bound === 'end' ) {
+        return $value . ' 23:59:59';
+    }
+
+    return $value . ' 00:00:00';
 }
 
 /**
@@ -243,12 +287,8 @@ function elk_301_migrator_dedupe( array $items ): array {
  * Convert a full URL to a site-relative path.
  */
 function elk_301_migrator_to_relative( string $url ): string {
-    $home = home_url();
-    if ( strpos( $url, $home ) === 0 ) {
-        $relative = substr( $url, strlen( $home ) );
-        if ( $relative === '' || $relative === false ) {
-            return '/';
-        }
+    $relative = elk_301_migrator_to_site_relative( $url );
+    if ( $relative !== null ) {
         return $relative;
     }
 
@@ -256,6 +296,55 @@ function elk_301_migrator_to_relative( string $url ): string {
     $path   = $parsed['path'] ?? '/';
     if ( ! empty( $parsed['query'] ) ) {
         $path .= '?' . $parsed['query'];
+    }
+
+    return $path;
+}
+
+/**
+ * Convert local absolute URLs or site-relative paths to a site-relative path.
+ * Returns null for external absolute URLs.
+ */
+function elk_301_migrator_to_site_relative( string $url ): ?string {
+    if ( $url === '' ) {
+        return null;
+    }
+
+    if ( $url[0] === '/' && substr( $url, 0, 2 ) !== '//' ) {
+        return $url;
+    }
+
+    $home = wp_parse_url( home_url() );
+    $test = wp_parse_url( $url );
+    if ( empty( $home['host'] ) || empty( $test['host'] ) ) {
+        return null;
+    }
+
+    $home_host = strtolower( $home['host'] );
+    $test_host = strtolower( $test['host'] );
+    $home_port = isset( $home['port'] ) ? (int) $home['port'] : null;
+    $test_port = isset( $test['port'] ) ? (int) $test['port'] : null;
+
+    if ( $home_host !== $test_host || $home_port !== $test_port ) {
+        return null;
+    }
+
+    $home_path = isset( $home['path'] ) ? rtrim( $home['path'], '/' ) : '';
+    $path      = $test['path'] ?? '/';
+
+    if ( $home_path !== '' && strpos( $path . '/', $home_path . '/' ) === 0 ) {
+        $path = substr( $path, strlen( $home_path ) );
+        if ( $path === '' || $path === false ) {
+            $path = '/';
+        }
+    }
+
+    if ( $path === '' ) {
+        $path = '/';
+    }
+
+    if ( ! empty( $test['query'] ) ) {
+        $path .= '?' . $test['query'];
     }
 
     return $path;
@@ -297,7 +386,18 @@ function elk_301_migrator_get_scan(): ?array {
  */
 function elk_301_migrator_get_targets(): array {
     $targets = get_option( ELK_301_MIGRATOR_TARGETS_OPTION, [] );
-    return is_array( $targets ) ? $targets : [];
+    if ( ! is_array( $targets ) ) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ( $targets as $source => $target ) {
+        if ( is_string( $source ) && is_scalar( $target ) ) {
+            $normalized[ $source ] = (string) $target;
+        }
+    }
+
+    return $normalized;
 }
 
 /**
@@ -356,12 +456,16 @@ function elk_301_migrator_build_url_index( array $groups ): array {
     $index = [];
     foreach ( $groups as $items ) {
         foreach ( $items as $item ) {
-            $url                   = $item['url'];
-            $index[ $url ]         = $url;
-            $encoded               = esc_url_raw( $url );
+            $url           = $item['url'];
+            $index[ $url ] = $url;
+            $encoded       = esc_url_raw( $url );
             if ( $encoded !== '' ) {
                 $index[ $encoded ] = $url;
             }
+
+            $relative                           = elk_301_migrator_to_relative( $url );
+            $index[ $relative ]                 = $url;
+            $index[ rawurldecode( $relative ) ] = $url;
         }
     }
     return $index;
@@ -392,13 +496,21 @@ function elk_301_migrator_canonicalize_source( string $source, array $known ): s
  * Allow absolute URLs (http/https) and site-relative paths starting with "/".
  */
 function elk_301_migrator_sanitize_target( string $target ): ?string {
+    $target = trim( $target );
     if ( $target === '' ) {
         return null;
     }
 
+    if ( preg_match( '/[\x00-\x20\x7f]/', $target ) ) {
+        return null;
+    }
+
     if ( $target[0] === '/' ) {
-        $clean = wp_kses_bad_protocol( $target, [ 'http', 'https' ] );
-        return $clean !== '' ? $clean : null;
+        if ( substr( $target, 0, 2 ) === '//' || strpos( $target, '\\' ) !== false ) {
+            return null;
+        }
+
+        return $target;
     }
 
     $url = esc_url_raw( $target, [ 'http', 'https' ] );

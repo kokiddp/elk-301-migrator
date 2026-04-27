@@ -6,7 +6,7 @@
  * @package           ELK_301_Migrator
  * @author            Gabriele Coquillard
  * @copyright         2026 Gabriele Coquillard @ ELK-Lab
- * @license           GPL-2.0-or-later
+ * @license           GPL-2.0-or-later See LICENSE.md
  *
  * @wordpress-plugin
  * Plugin Name:       ELK 301 Migrator
@@ -19,8 +19,11 @@
  * Author URI:        https://www.elk-lab.com
  * Text Domain:       elk-301-migrator
  * License:           GPL v2 or later
- * License URI:       http://www.gnu.org/licenses/gpl-2.0.txt
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  */
+
+// SPDX-License-Identifier: GPL-2.0-or-later
+// See LICENSE.md for full license text.
 
 if ( ! defined( 'WPINC' ) ) {
     die;

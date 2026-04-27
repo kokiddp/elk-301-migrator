@@ -1,4 +1,5 @@
 <?php
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 if ( ! defined( 'WPINC' ) ) {
     die;
@@ -64,8 +65,8 @@ function elk_301_migrator_is_identity( string $source, string $target ): bool {
     if ( $target[0] === '/' ) {
         $target_rel = $target;
     } else {
-        $target_rel = elk_301_migrator_to_relative( $target );
-        if ( strpos( $target, home_url() ) !== 0 && $target_rel === $target ) {
+        $target_rel = elk_301_migrator_to_site_relative( $target );
+        if ( $target_rel === null ) {
             return false;
         }
     }
@@ -113,16 +114,16 @@ function elk_301_migrator_build_htaccess( array $groups, array $targets, array $
     $lines         = [];
 
     if ( $with_comments ) {
-        $lines[] = '# ELK 301 Migrator — generated ' . gmdate( 'Y-m-d H:i' ) . ' UTC';
-        $lines[] = '# Lines without a target still use NEW_URL — replace before deploying.';
+        $lines[] = '# ELK 301 Migrator - generated ' . gmdate( 'Y-m-d H:i' ) . ' UTC';
+        $lines[] = '# Lines without a target still use NEW_URL - replace before deploying.';
         $lines[] = '';
     }
 
     foreach ( elk_301_migrator_flatten( $groups, $targets, $options ) as $item ) {
-        $source = elk_301_migrator_to_relative( $item['url'] );
-        $target = $item['target'] !== '' ? $item['target'] : 'NEW_URL';
+        $source = elk_301_migrator_escape_config_token( elk_301_migrator_to_relative( $item['url'] ) );
+        $target = $item['target'] !== '' ? elk_301_migrator_escape_config_token( $item['target'] ) : 'NEW_URL';
         if ( $with_comments ) {
-            $lines[] = sprintf( '# %s', $item['label'] );
+            $lines[] = sprintf( '# %s', elk_301_migrator_escape_config_comment( $item['label'] ) );
         }
         $lines[] = sprintf( 'Redirect 301 %s %s', $source, $target );
     }
@@ -140,16 +141,16 @@ function elk_301_migrator_build_nginx( array $groups, array $targets, array $opt
     $lines         = [];
 
     if ( $with_comments ) {
-        $lines[] = '# ELK 301 Migrator — generated ' . gmdate( 'Y-m-d H:i' ) . ' UTC';
-        $lines[] = '# Lines without a target still use NEW_URL — replace before deploying.';
+        $lines[] = '# ELK 301 Migrator - generated ' . gmdate( 'Y-m-d H:i' ) . ' UTC';
+        $lines[] = '# Lines without a target still use NEW_URL - replace before deploying.';
         $lines[] = '';
     }
 
     foreach ( elk_301_migrator_flatten( $groups, $targets, $options ) as $item ) {
-        $source = elk_301_migrator_to_relative( $item['url'] );
-        $target = $item['target'] !== '' ? $item['target'] : 'NEW_URL';
+        $source = elk_301_migrator_escape_config_token( elk_301_migrator_to_relative( $item['url'] ) );
+        $target = $item['target'] !== '' ? elk_301_migrator_escape_config_token( $item['target'] ) : 'NEW_URL';
         if ( $with_comments ) {
-            $lines[] = sprintf( '# %s', $item['label'] );
+            $lines[] = sprintf( '# %s', elk_301_migrator_escape_config_comment( $item['label'] ) );
         }
         $lines[] = sprintf( 'rewrite ^%s$ %s permanent;', preg_quote( $source, '/' ), $target );
     }
@@ -175,6 +176,18 @@ function elk_301_migrator_build_json( array $groups, array $targets, array $opti
     }
 
     return wp_json_encode( $items, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+}
+
+function elk_301_migrator_escape_config_comment( string $value ): string {
+    return trim( preg_replace( '/[\r\n\t]+/', ' ', $value ) ?? '' );
+}
+
+function elk_301_migrator_escape_config_token( string $value ): string {
+    return str_replace(
+        [ "\r", "\n", "\t", ' ', ';', '#', '$', '{', '}', '"', "'", '`', '\\' ],
+        [ '', '', '%09', '%20', '%3B', '%23', '%24', '%7B', '%7D', '%22', '%27', '%60', '%5C' ],
+        $value
+    );
 }
 
 /**
