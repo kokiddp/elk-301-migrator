@@ -233,6 +233,118 @@ function elk_301_migrator_parse_extensions( $value ): array {
     return array_values( array_unique( $out ) );
 }
 
+/**
+ * @param array{url?: string, label?: string, type?: string, language_code?: string, language_label?: string} $item
+ * @return array{key: string, code: string, label: string, is_default: bool}
+ */
+function elk_301_migrator_get_item_language_group( array $item ): array {
+    $default_language = elk_301_migrator_get_default_language();
+    $language_code    = isset( $item['language_code'] ) && is_scalar( $item['language_code'] ) ? trim( (string) $item['language_code'] ) : '';
+    $language_label   = isset( $item['language_label'] ) && is_scalar( $item['language_label'] ) ? trim( (string) $item['language_label'] ) : '';
+
+    if ( $language_code === '' ) {
+        $languages = elk_301_migrator_get_translation_languages();
+        $label     = isset( $item['label'] ) && is_scalar( $item['label'] ) ? (string) $item['label'] : '';
+
+        foreach ( $languages as $code => $translated_label ) {
+            $suffix = ' (' . $translated_label . ')';
+            if ( $translated_label !== '' && substr( $label, -strlen( $suffix ) ) === $suffix ) {
+                $language_code  = $code;
+                $language_label = $translated_label;
+                break;
+            }
+        }
+    }
+
+    if ( $language_code === '' && $default_language !== null ) {
+        $language_code  = $default_language['code'];
+        $language_label = $default_language['label'];
+    }
+
+    if ( $language_code === '' ) {
+        return [
+            'key'        => 'default',
+            'code'       => 'default',
+            'label'      => __( 'Site default', 'elk-301-migrator' ),
+            'is_default' => true,
+        ];
+    }
+
+    if ( $language_label === '' ) {
+        $languages      = elk_301_migrator_get_translation_languages();
+        $language_label = $languages[ $language_code ] ?? $language_code;
+    }
+
+    return [
+        'key'        => $language_code,
+        'code'       => $language_code,
+        'label'      => $language_label,
+        'is_default' => $default_language !== null && $default_language['code'] === $language_code,
+    ];
+}
+
+function elk_301_migrator_strip_language_suffix( string $label, string $language_label ): string {
+    if ( $language_label === '' ) {
+        return $label;
+    }
+
+    $suffix = ' (' . $language_label . ')';
+    if ( substr( $label, -strlen( $suffix ) ) === $suffix ) {
+        return substr( $label, 0, -strlen( $suffix ) );
+    }
+
+    return $label;
+}
+
+/**
+ * @param array<int, array{url?: string, label?: string, type?: string, language_code?: string, language_label?: string}> $items
+ * @return array<int, array{code: string, label: string, is_default: bool, items: array<int, array>}>
+ */
+function elk_301_migrator_group_scan_items_by_language( array $items ): array {
+    $groups = [];
+
+    foreach ( $items as $item ) {
+        $language_group = elk_301_migrator_get_item_language_group( $item );
+        $group_key      = $language_group['key'];
+
+        if ( ! isset( $groups[ $group_key ] ) ) {
+            $groups[ $group_key ] = [
+                'code'       => $language_group['code'],
+                'label'      => $language_group['label'],
+                'is_default' => $language_group['is_default'],
+                'items'      => [],
+            ];
+        }
+
+        if ( isset( $item['label'] ) && is_scalar( $item['label'] ) ) {
+            $item['display_label'] = elk_301_migrator_strip_language_suffix( (string) $item['label'], $groups[ $group_key ]['label'] );
+        }
+
+        $groups[ $group_key ]['items'][] = $item;
+    }
+
+    uasort(
+        $groups,
+        function ( array $left, array $right ): int {
+            if ( $left['is_default'] !== $right['is_default'] ) {
+                return $left['is_default'] ? -1 : 1;
+            }
+
+            return strnatcasecmp( $left['label'], $right['label'] );
+        }
+    );
+
+    return array_values( $groups );
+}
+
+function elk_301_migrator_get_language_group_heading( array $language_group ): string {
+    if ( ! empty( $language_group['is_default'] ) ) {
+        return sprintf( __( '%s (default)', 'elk-301-migrator' ), $language_group['label'] );
+    }
+
+    return $language_group['label'];
+}
+
 function elk_301_migrator_render_page(): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         return;
@@ -287,6 +399,7 @@ function elk_301_migrator_render_page(): void {
             .elk-301-identity { background-color: #fcebea !important; }
             .elk-301-identity td { border-left: 3px solid #d63638; }
             .elk-301-ignore-column { text-align: center; width: 8%; }
+            .elk-301-language-heading { margin: 1em 0 0.5em; }
         </style>
         <h1><?php esc_html_e( 'ELK 301 Migrator', 'elk-301-migrator' ); ?></h1>
 
@@ -497,59 +610,67 @@ function elk_301_migrator_render_page(): void {
                 if ( empty( $scan['groups'][ $key ] ) ) {
                     continue;
                 }
+
+                $language_groups      = elk_301_migrator_group_scan_items_by_language( $scan['groups'][ $key ] );
+                $show_language_groups = count( $language_groups ) > 1;
                 ?>
                 <h3><?php echo esc_html( $heading ); ?> <span class="count">(<?php echo esc_html( (string) count( $scan['groups'][ $key ] ) ); ?>)</span></h3>
-                <table class="widefat striped">
-                    <thead>
-                        <tr>
-                            <th style="width:35%"><?php esc_html_e( 'Source URL', 'elk-301-migrator' ); ?></th>
-                            <th style="width:35%"><?php esc_html_e( 'Target URL', 'elk-301-migrator' ); ?></th>
-                            <th class="elk-301-ignore-column"><?php esc_html_e( 'Ignore', 'elk-301-migrator' ); ?></th>
-                            <th style="width:15%"><?php esc_html_e( 'Type', 'elk-301-migrator' ); ?></th>
-                            <th><?php esc_html_e( 'Label', 'elk-301-migrator' ); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php foreach ( $scan['groups'][ $key ] as $item ) :
-                        $current   = elk_301_migrator_lookup_target( $item['url'], $targets );
-                        $is_ignored = $current === '' && elk_301_migrator_is_ignored( $item['url'], $ignored );
-                        $row_class = '';
-                        if ( $current === '' && ! $is_ignored ) {
-                            $row_class = 'elk-301-unmapped';
-                        } elseif ( elk_301_migrator_is_identity( $item['url'], $current ) ) {
-                            $row_class = 'elk-301-identity';
-                        }
-                        ?>
-                        <tr class="<?php echo esc_attr( $row_class ); ?>">
-                            <td>
-                                <code><?php echo esc_html( elk_301_migrator_to_relative( $item['url'] ) ); ?></code>
-                            </td>
-                            <td>
-                                <input
-                                    type="text"
-                                    class="regular-text code elk-301-target"
-                                    style="width:100%;"
-                                    data-source="<?php echo esc_attr( $item['url'] ); ?>"
-                                    data-source-rel="<?php echo esc_attr( elk_301_migrator_to_relative( $item['url'] ) ); ?>"
-                                    data-initial="<?php echo esc_attr( $current ); ?>"
-                                    data-ignored-initial="<?php echo esc_attr( $is_ignored ? '1' : '0' ); ?>"
-                                    value="<?php echo esc_attr( $current ); ?>"
-                                    placeholder="/new-path or https://example.com/new-path" />
-                            </td>
-                            <td class="elk-301-ignore-column">
-                                <input
-                                    type="checkbox"
-                                    class="elk-301-ignore"
-                                    aria-label="<?php echo esc_attr( sprintf( __( 'Ignore %s', 'elk-301-migrator' ), elk_301_migrator_to_relative( $item['url'] ) ) ); ?>"
-                                    <?php checked( $is_ignored ); ?> />
-                            </td>
-                            <td><?php echo esc_html( $item['type'] ); ?></td>
-                            <td><?php echo esc_html( $item['label'] ); ?></td>
-                        </tr>
-                        <?php $row_index++; ?>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
+                <?php foreach ( $language_groups as $language_group ) : ?>
+                    <?php if ( $show_language_groups ) : ?>
+                        <h4 class="elk-301-language-heading"><?php echo esc_html( elk_301_migrator_get_language_group_heading( $language_group ) ); ?> <span class="count">(<?php echo esc_html( (string) count( $language_group['items'] ) ); ?>)</span></h4>
+                    <?php endif; ?>
+                    <table class="widefat striped">
+                        <thead>
+                            <tr>
+                                <th style="width:35%"><?php esc_html_e( 'Source URL', 'elk-301-migrator' ); ?></th>
+                                <th style="width:35%"><?php esc_html_e( 'Target URL', 'elk-301-migrator' ); ?></th>
+                                <th class="elk-301-ignore-column"><?php esc_html_e( 'Ignore', 'elk-301-migrator' ); ?></th>
+                                <th style="width:15%"><?php esc_html_e( 'Type', 'elk-301-migrator' ); ?></th>
+                                <th><?php esc_html_e( 'Label', 'elk-301-migrator' ); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ( $language_group['items'] as $item ) :
+                            $current    = elk_301_migrator_lookup_target( $item['url'], $targets );
+                            $is_ignored = $current === '' && elk_301_migrator_is_ignored( $item['url'], $ignored );
+                            $row_class  = '';
+                            if ( $current === '' && ! $is_ignored ) {
+                                $row_class = 'elk-301-unmapped';
+                            } elseif ( elk_301_migrator_is_identity( $item['url'], $current ) ) {
+                                $row_class = 'elk-301-identity';
+                            }
+                            ?>
+                            <tr class="<?php echo esc_attr( $row_class ); ?>">
+                                <td>
+                                    <code><?php echo esc_html( elk_301_migrator_to_relative( $item['url'] ) ); ?></code>
+                                </td>
+                                <td>
+                                    <input
+                                        type="text"
+                                        class="regular-text code elk-301-target"
+                                        style="width:100%;"
+                                        data-source="<?php echo esc_attr( $item['url'] ); ?>"
+                                        data-source-rel="<?php echo esc_attr( elk_301_migrator_to_relative( $item['url'] ) ); ?>"
+                                        data-initial="<?php echo esc_attr( $current ); ?>"
+                                        data-ignored-initial="<?php echo esc_attr( $is_ignored ? '1' : '0' ); ?>"
+                                        value="<?php echo esc_attr( $current ); ?>"
+                                        placeholder="/new-path or https://example.com/new-path" />
+                                </td>
+                                <td class="elk-301-ignore-column">
+                                    <input
+                                        type="checkbox"
+                                        class="elk-301-ignore"
+                                        aria-label="<?php echo esc_attr( sprintf( __( 'Ignore %s', 'elk-301-migrator' ), elk_301_migrator_to_relative( $item['url'] ) ) ); ?>"
+                                        <?php checked( $is_ignored ); ?> />
+                                </td>
+                                <td><?php echo esc_html( $item['type'] ); ?></td>
+                                <td><?php echo esc_html( isset( $item['display_label'] ) ? (string) $item['display_label'] : $item['label'] ); ?></td>
+                            </tr>
+                            <?php $row_index++; ?>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endforeach; ?>
             <?php endforeach; ?>
 
             <p><button type="submit" class="button button-primary"><?php esc_html_e( 'Save targets', 'elk-301-migrator' ); ?></button></p>

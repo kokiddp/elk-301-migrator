@@ -14,7 +14,7 @@ const ELK_301_MIGRATOR_SCAN_BATCH     = 500;
  * Collect every public URL on the site grouped by source type.
  *
  * @param array{attachment_after?: string, attachment_before?: string, attachment_extensions?: array<int, string>} $filters
- * @return array<string, array<int, array{url: string, label: string, type: string}>>
+ * @return array<string, array<int, array{url: string, label: string, type: string, language_code?: string, language_label?: string}>>
  */
 function elk_301_migrator_collect_urls( array $filters = [] ): array {
     $groups = [
@@ -217,11 +217,12 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
 /**
  * Expand a scanned item into translated URL variants when a multilingual plugin is active.
  *
- * @param array{url: string, label: string, type: string} $item
+ * @param array{url: string, label: string, type: string, language_code?: string, language_label?: string} $item
  * @param array<string, mixed>                            $context
- * @return array<int, array{url: string, label: string, type: string}>
+ * @return array<int, array{url: string, label: string, type: string, language_code?: string, language_label?: string}>
  */
 function elk_301_migrator_collect_url_variants( array $item, array $context = [] ): array {
+    $item      = elk_301_migrator_attach_default_language_context( $item );
     $variants  = [ $item ];
     $languages = elk_301_migrator_get_translation_languages();
 
@@ -231,11 +232,14 @@ function elk_301_migrator_collect_url_variants( array $item, array $context = []
             continue;
         }
 
-        $variants[] = [
-            'url'   => $translated_url,
-            'label' => $translated_url === $item['url'] ? $item['label'] : elk_301_migrator_label_with_language( $item['label'], $language_label ?: $language_code ),
-            'type'  => $item['type'],
-        ];
+        $variant_item = $item;
+        $variant_item['url']            = $translated_url;
+        $variant_item['label']          = $translated_url === $item['url'] ? $item['label'] : elk_301_migrator_label_with_language( $item['label'], $language_label ?: $language_code );
+        $variant_item['type']           = $item['type'];
+        $variant_item['language_code']  = $language_code;
+        $variant_item['language_label'] = $language_label ?: $language_code;
+
+        $variants[] = $variant_item;
     }
 
     $filtered = apply_filters( 'elk_301_migrator_url_variants', $variants, $item, $context );
@@ -324,6 +328,69 @@ function elk_301_migrator_get_translation_languages(): array {
     }
 
     return $languages;
+}
+
+/**
+ * @return array{code: string, label: string}|null
+ */
+function elk_301_migrator_get_default_language(): ?array {
+    static $default_language = null;
+    static $resolved         = false;
+
+    if ( $resolved ) {
+        return $default_language;
+    }
+
+    $resolved = true;
+    $code     = '';
+
+    if ( function_exists( 'pll_default_language' ) ) {
+        $polylang_default = pll_default_language();
+        if ( is_scalar( $polylang_default ) ) {
+            $code = trim( (string) $polylang_default );
+        }
+    }
+
+    if ( $code === '' ) {
+        $wpml_default = apply_filters( 'wpml_default_language', null );
+        if ( is_scalar( $wpml_default ) ) {
+            $code = trim( (string) $wpml_default );
+        }
+    }
+
+    if ( $code === '' ) {
+        return null;
+    }
+
+    $languages = elk_301_migrator_get_translation_languages();
+    $label     = $languages[ $code ] ?? $code;
+
+    $default_language = [
+        'code'  => $code,
+        'label' => $label,
+    ];
+
+    return $default_language;
+}
+
+/**
+ * @param array{url: string, label: string, type: string, language_code?: string, language_label?: string} $item
+ * @return array{url: string, label: string, type: string, language_code?: string, language_label?: string}
+ */
+function elk_301_migrator_attach_default_language_context( array $item ): array {
+    if ( ! empty( $item['language_code'] ) ) {
+        return $item;
+    }
+
+    $default_language = elk_301_migrator_get_default_language();
+    if ( $default_language === null ) {
+        return $item;
+    }
+
+    $item['language_code']  = $default_language['code'];
+    $item['language_label'] = $default_language['label'];
+
+    return $item;
 }
 
 /**
@@ -510,8 +577,8 @@ function elk_301_migrator_label_with_language( string $label, string $language_l
 
 /**
  * @param mixed                                   $items
- * @param array{url: string, label: string, type: string} $fallback_item
- * @return array<int, array{url: string, label: string, type: string}>
+ * @param array{url: string, label: string, type: string, language_code?: string, language_label?: string} $fallback_item
+ * @return array<int, array{url: string, label: string, type: string, language_code?: string, language_label?: string}>
  */
 function elk_301_migrator_normalize_url_variants( $items, array $fallback_item ): array {
     if ( ! is_array( $items ) ) {
@@ -545,6 +612,18 @@ function elk_301_migrator_normalize_url_variants( $items, array $fallback_item )
             'label' => isset( $item['label'] ) && is_scalar( $item['label'] ) ? (string) $item['label'] : $fallback_item['label'],
             'type'  => isset( $item['type'] ) && is_scalar( $item['type'] ) ? (string) $item['type'] : $fallback_item['type'],
         ];
+
+        if ( isset( $item['language_code'] ) && is_scalar( $item['language_code'] ) && trim( (string) $item['language_code'] ) !== '' ) {
+            $normalized[ count( $normalized ) - 1 ]['language_code'] = trim( (string) $item['language_code'] );
+        } elseif ( isset( $fallback_item['language_code'] ) && is_scalar( $fallback_item['language_code'] ) && trim( (string) $fallback_item['language_code'] ) !== '' ) {
+            $normalized[ count( $normalized ) - 1 ]['language_code'] = trim( (string) $fallback_item['language_code'] );
+        }
+
+        if ( isset( $item['language_label'] ) && is_scalar( $item['language_label'] ) && trim( (string) $item['language_label'] ) !== '' ) {
+            $normalized[ count( $normalized ) - 1 ]['language_label'] = trim( (string) $item['language_label'] );
+        } elseif ( isset( $fallback_item['language_label'] ) && is_scalar( $fallback_item['language_label'] ) && trim( (string) $fallback_item['language_label'] ) !== '' ) {
+            $normalized[ count( $normalized ) - 1 ]['language_label'] = trim( (string) $fallback_item['language_label'] );
+        }
     }
 
     if ( ! $normalized ) {

@@ -16,6 +16,7 @@ Thanks for working on ELK 301 Migrator.
 - Sanitize request data with WordPress helpers before use.
 - Escape rendered HTML with `esc_html()`, `esc_attr()`, or `esc_url()` as appropriate.
 - Prefer small, focused functions over broad rewrites.
+- When code changes affect behavior, developer workflow, or plugin capabilities, update `README.md`, `CONTRIBUTING.md`, and `AGENTS.md` in the same change.
 
 ## Testing
 
@@ -29,6 +30,7 @@ For behavior changes, test these flows manually:
 
 - Run a scan with and without attachment filters.
 - If WPML, Polylang, or another translation plugin is active, run a scan and confirm translated posts, terms, and translated media URLs are added without duplicate rows for untranslated content.
+- Confirm multilingual scan results are grouped by language in the admin table and that target saving and ignore toggles still work inside each language section.
 - Save, clear, and update target URLs.
 - Mark and unmark ignored rows without a target.
 - Import a JSON export.

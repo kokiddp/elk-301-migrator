@@ -11,6 +11,7 @@ These instructions apply to the `elk-301-migrator` plugin directory.
 - The admin UI lives in `includes/admin.php`.
 - URL scanning and saved target storage live in `includes/scanner.php`.
 - Multilingual scan expansion for WPML, Polylang, and other translation plugins is implemented in `includes/scanner.php`.
+- The admin scan table groups multilingual rows by language in `includes/admin.php`, with fallback handling for legacy scans that only encoded language in labels.
 - Scanner extension hooks include `elk_301_migrator_translation_languages`, `elk_301_migrator_translated_url`, and `elk_301_migrator_url_variants`.
 - Export builders live in `includes/exporter.php`.
 - Ignored rows are admin review state only; they suppress missing-target highlighting but do not change exports.
@@ -24,6 +25,7 @@ These instructions apply to the `elk-301-migrator` plugin directory.
 - Do not add build tooling or dependencies unless the task explicitly needs them.
 - Keep generated server config output free of raw newlines, tabs, or spaces inside directive tokens.
 - For multilingual scans, prefer plugin APIs that resolve real translated objects over guessed language-prefixed slugs or paths.
+- When code changes affect behavior, workflow, or documented plugin capabilities, update `README.md`, `CONTRIBUTING.md`, and `AGENTS.md` together.
 - Add `// SPDX-License-Identifier: GPL-2.0-or-later` to new PHP files.
 
 ## Verification
