@@ -11,6 +11,7 @@ These instructions apply to the `elk-301-migrator` plugin directory.
 - The admin UI lives in `includes/admin.php`.
 - URL scanning and saved target storage live in `includes/scanner.php`.
 - Export builders live in `includes/exporter.php`.
+- Ignored rows are admin review state only; they suppress missing-target highlighting but do not change exports.
 
 ## Coding Rules
 

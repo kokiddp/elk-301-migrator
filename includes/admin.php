@@ -55,6 +55,7 @@ function elk_301_migrator_handle_save_targets(): void {
     $payload = isset( $_POST['payload'] ) ? wp_unslash( (string) $_POST['payload'] ) : '';
     $decoded = json_decode( $payload, true );
     $map     = [];
+    $ignored = [];
 
     if ( is_array( $decoded ) ) {
         foreach ( $decoded as $entry ) {
@@ -66,10 +67,13 @@ function elk_301_migrator_handle_save_targets(): void {
                 continue;
             }
             $map[ $source ] = array_key_exists( 'target', $entry ) ? (string) $entry['target'] : null;
+            if ( array_key_exists( 'ignored', $entry ) ) {
+                $ignored[ $source ] = ! empty( $entry['ignored'] );
+            }
         }
     }
 
-    $changed = elk_301_migrator_save_targets( $map );
+    $changed = elk_301_migrator_save_targets( $map, $ignored );
     $submitted = count( $map );
 
     wp_safe_redirect( add_query_arg(
@@ -236,6 +240,7 @@ function elk_301_migrator_render_page(): void {
 
     $scan    = elk_301_migrator_get_scan();
     $targets = elk_301_migrator_get_targets();
+    $ignored = elk_301_migrator_get_ignored();
 
     $filters = $scan['filters'] ?? [
         'attachment_after'      => '',
@@ -257,12 +262,17 @@ function elk_301_migrator_render_page(): void {
 
     $total       = 0;
     $with_target = 0;
+    $ignored_total = 0;
     if ( $scan ) {
         foreach ( $scan['groups'] as $items ) {
             foreach ( $items as $item ) {
                 $total++;
-                if ( elk_301_migrator_lookup_target( $item['url'], $targets ) !== '' ) {
+                $target = elk_301_migrator_lookup_target( $item['url'], $targets );
+                if ( $target !== '' ) {
                     $with_target++;
+                }
+                if ( $target === '' && elk_301_migrator_is_ignored( $item['url'], $ignored ) ) {
+                    $ignored_total++;
                 }
             }
         }
@@ -276,6 +286,7 @@ function elk_301_migrator_render_page(): void {
             .elk-301-unmapped td { border-left: 3px solid #dba617; }
             .elk-301-identity { background-color: #fcebea !important; }
             .elk-301-identity td { border-left: 3px solid #d63638; }
+            .elk-301-ignore-column { text-align: center; width: 8%; }
         </style>
         <h1><?php esc_html_e( 'ELK 301 Migrator', 'elk-301-migrator' ); ?></h1>
 
@@ -364,10 +375,11 @@ function elk_301_migrator_render_page(): void {
                 <?php if ( $scan ) : ?>
                     <span class="description" style="margin-left:1em;">
                         <?php printf(
-                            esc_html__( 'Last scan: %s (%d URLs, %d with target).', 'elk-301-migrator' ),
+                            esc_html__( 'Last scan: %s (%d URLs, %d with target, %d ignored).', 'elk-301-migrator' ),
                             esc_html( wp_date( 'Y-m-d H:i', (int) $scan['scanned_at'] ) ),
                             (int) $total,
-                            (int) $with_target
+                            (int) $with_target,
+                            (int) $ignored_total
                         ); ?>
                     </span>
                 <?php endif; ?>
@@ -469,7 +481,7 @@ function elk_301_migrator_render_page(): void {
         <hr />
 
         <h2><?php esc_html_e( 'Target URLs', 'elk-301-migrator' ); ?></h2>
-        <p><?php esc_html_e( 'Fill in the target column. Site-relative paths (/new-page) or absolute URLs (https://example.com/page) are both accepted. Empty values remove the saved mapping.', 'elk-301-migrator' ); ?></p>
+        <p><?php esc_html_e( 'Fill in the target column. Site-relative paths (/new-page) or absolute URLs (https://example.com/page) are both accepted. Empty values remove the saved mapping. Mark rows as ignored when they intentionally do not need a target.', 'elk-301-migrator' ); ?></p>
 
         <form method="post" action="<?php echo esc_url( $post_url ); ?>" id="elk-301-targets-form">
             <input type="hidden" name="action" value="elk_301_migrator_save_targets" />
@@ -492,6 +504,7 @@ function elk_301_migrator_render_page(): void {
                         <tr>
                             <th style="width:35%"><?php esc_html_e( 'Source URL', 'elk-301-migrator' ); ?></th>
                             <th style="width:35%"><?php esc_html_e( 'Target URL', 'elk-301-migrator' ); ?></th>
+                            <th class="elk-301-ignore-column"><?php esc_html_e( 'Ignore', 'elk-301-migrator' ); ?></th>
                             <th style="width:15%"><?php esc_html_e( 'Type', 'elk-301-migrator' ); ?></th>
                             <th><?php esc_html_e( 'Label', 'elk-301-migrator' ); ?></th>
                         </tr>
@@ -499,8 +512,9 @@ function elk_301_migrator_render_page(): void {
                     <tbody>
                     <?php foreach ( $scan['groups'][ $key ] as $item ) :
                         $current   = elk_301_migrator_lookup_target( $item['url'], $targets );
+                        $is_ignored = $current === '' && elk_301_migrator_is_ignored( $item['url'], $ignored );
                         $row_class = '';
-                        if ( $current === '' ) {
+                        if ( $current === '' && ! $is_ignored ) {
                             $row_class = 'elk-301-unmapped';
                         } elseif ( elk_301_migrator_is_identity( $item['url'], $current ) ) {
                             $row_class = 'elk-301-identity';
@@ -518,8 +532,16 @@ function elk_301_migrator_render_page(): void {
                                     data-source="<?php echo esc_attr( $item['url'] ); ?>"
                                     data-source-rel="<?php echo esc_attr( elk_301_migrator_to_relative( $item['url'] ) ); ?>"
                                     data-initial="<?php echo esc_attr( $current ); ?>"
+                                    data-ignored-initial="<?php echo esc_attr( $is_ignored ? '1' : '0' ); ?>"
                                     value="<?php echo esc_attr( $current ); ?>"
                                     placeholder="/new-path or https://example.com/new-path" />
+                            </td>
+                            <td class="elk-301-ignore-column">
+                                <input
+                                    type="checkbox"
+                                    class="elk-301-ignore"
+                                    aria-label="<?php echo esc_attr( sprintf( __( 'Ignore %s', 'elk-301-migrator' ), elk_301_migrator_to_relative( $item['url'] ) ) ); ?>"
+                                    <?php checked( $is_ignored ); ?> />
                             </td>
                             <td><?php echo esc_html( $item['type'] ); ?></td>
                             <td><?php echo esc_html( $item['label'] ); ?></td>
@@ -558,7 +580,8 @@ function elk_301_migrator_render_page(): void {
                 row.classList.remove('elk-301-unmapped', 'elk-301-identity');
 
                 var target = input.value.trim();
-                if (target === '') {
+                var ignore = row.querySelector('.elk-301-ignore');
+                if (target === '' && (!ignore || !ignore.checked)) {
                     row.classList.add('elk-301-unmapped');
                     return;
                 }
@@ -573,16 +596,28 @@ function elk_301_migrator_render_page(): void {
             inputs.forEach(function (input) {
                 input.addEventListener('input', function () { classify(input); });
             });
+            form.querySelectorAll('.elk-301-ignore').forEach(function (checkbox) {
+                checkbox.addEventListener('change', function () {
+                    var row = checkbox.closest('tr');
+                    var input = row ? row.querySelector('.elk-301-target') : null;
+                    if (input) { classify(input); }
+                });
+            });
 
             form.addEventListener('submit', function () {
                 var payload = [];
                 inputs.forEach(function (input) {
+                    var row = input.closest('tr');
+                    var ignore = row ? row.querySelector('.elk-301-ignore') : null;
                     var current = input.value.trim();
                     var initial = (input.getAttribute('data-initial') || '').trim();
-                    if (current === initial) { return; }
+                    var ignored = ignore && ignore.checked;
+                    var ignoredInitial = input.getAttribute('data-ignored-initial') === '1';
+                    if (current === initial && ignored === ignoredInitial) { return; }
                     payload.push({
                         source: input.getAttribute('data-source'),
-                        target: current
+                        target: current,
+                        ignored: ignored
                     });
                 });
                 document.getElementById('elk-301-payload').value = JSON.stringify(payload);

@@ -7,6 +7,7 @@ if ( ! defined( 'WPINC' ) ) {
 
 const ELK_301_MIGRATOR_SCAN_OPTION    = 'elk_301_migrator_scan';
 const ELK_301_MIGRATOR_TARGETS_OPTION = 'elk_301_migrator_targets';
+const ELK_301_MIGRATOR_IGNORED_OPTION = 'elk_301_migrator_ignored';
 const ELK_301_MIGRATOR_SCAN_BATCH     = 500;
 
 /**
@@ -366,6 +367,7 @@ function elk_301_migrator_run_scan( array $filters ): array {
 
     update_option( ELK_301_MIGRATOR_SCAN_OPTION, $scan, false );
     elk_301_migrator_prune_targets( $groups );
+    elk_301_migrator_prune_ignored( $groups );
 
     return $scan;
 }
@@ -401,13 +403,49 @@ function elk_301_migrator_get_targets(): array {
 }
 
 /**
- * Merge targets into the stored map. Only keys present in $incoming are touched.
- * A value of '' explicitly clears that source; a value of null leaves it alone.
+ * @return array<string, bool> source URL => ignored
+ */
+function elk_301_migrator_get_ignored(): array {
+    $ignored = get_option( ELK_301_MIGRATOR_IGNORED_OPTION, [] );
+    if ( ! is_array( $ignored ) ) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ( $ignored as $source => $value ) {
+        if ( is_string( $source ) && ! empty( $value ) ) {
+            $normalized[ $source ] = true;
+        }
+    }
+
+    return $normalized;
+}
+
+/**
+ * Look up an ignored marker for a scanned URL.
+ *
+ * @param array<string, bool> $ignored
+ */
+function elk_301_migrator_is_ignored( string $url, array $ignored ): bool {
+    if ( ! empty( $ignored[ $url ] ) ) {
+        return true;
+    }
+
+    $encoded = esc_url_raw( $url );
+    return $encoded !== '' && ! empty( $ignored[ $encoded ] );
+}
+
+/**
+ * Merge targets and ignored markers into the stored maps. Only keys present in
+ * $incoming are touched. A target value of '' explicitly clears that source; a
+ * target value of null leaves it alone.
  *
  * @param array<string, string|null> $incoming source URL => target URL (or null to skip)
+ * @param array<string, bool>        $ignored  source URL => ignored marker
  */
-function elk_301_migrator_save_targets( array $incoming ): int {
+function elk_301_migrator_save_targets( array $incoming, array $ignored = [] ): int {
     $current = elk_301_migrator_get_targets();
+    $current_ignored = elk_301_migrator_get_ignored();
     $changed = 0;
     $scan    = elk_301_migrator_get_scan();
     $known   = elk_301_migrator_build_url_index( $scan['groups'] ?? [] );
@@ -442,7 +480,28 @@ function elk_301_migrator_save_targets( array $incoming ): int {
         }
     }
 
+    foreach ( $ignored as $source => $ignore ) {
+        $source = elk_301_migrator_canonicalize_source( (string) $source, $known );
+        if ( $source === '' ) {
+            continue;
+        }
+
+        if ( $ignore && ( $current[ $source ] ?? '' ) === '' ) {
+            if ( empty( $current_ignored[ $source ] ) ) {
+                $current_ignored[ $source ] = true;
+                $changed++;
+            }
+            continue;
+        }
+
+        if ( isset( $current_ignored[ $source ] ) ) {
+            unset( $current_ignored[ $source ] );
+            $changed++;
+        }
+    }
+
     update_option( ELK_301_MIGRATOR_TARGETS_OPTION, $current, false );
+    update_option( ELK_301_MIGRATOR_IGNORED_OPTION, $current_ignored, false );
     return $changed;
 }
 
@@ -540,5 +599,31 @@ function elk_301_migrator_prune_targets( array $groups ): void {
 
     if ( $next !== $targets ) {
         update_option( ELK_301_MIGRATOR_TARGETS_OPTION, $next, false );
+    }
+}
+
+/**
+ * Drop ignored markers whose source URL is no longer in the scan, and re-key
+ * markers stored under a percent-encoded variant to the scan's canonical URL.
+ *
+ * @param array<string, array<int, array{url: string, label: string, type: string}>> $groups
+ */
+function elk_301_migrator_prune_ignored( array $groups ): void {
+    $ignored = elk_301_migrator_get_ignored();
+    if ( ! $ignored ) {
+        return;
+    }
+
+    $index = elk_301_migrator_build_url_index( $groups );
+    $next  = [];
+
+    foreach ( $ignored as $source => $value ) {
+        if ( isset( $index[ $source ] ) && $value ) {
+            $next[ $index[ $source ] ] = true;
+        }
+    }
+
+    if ( $next !== $ignored ) {
+        update_option( ELK_301_MIGRATOR_IGNORED_OPTION, $next, false );
     }
 }

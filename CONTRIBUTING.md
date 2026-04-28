@@ -29,6 +29,7 @@ For behavior changes, test these flows manually:
 
 - Run a scan with and without attachment filters.
 - Save, clear, and update target URLs.
+- Mark and unmark ignored rows without a target.
 - Import a JSON export.
 - Export CSV, JSON, `.htaccess`, and Nginx formats.
 - Confirm identity redirects can be excluded.

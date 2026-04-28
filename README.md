@@ -21,10 +21,13 @@ It scans public posts, pages, custom post types, taxonomy terms, post type archi
 1. Run a scan.
 2. Optionally limit attachments by upload month and file extension.
 3. Fill the target URL column for rows that should redirect.
-4. Save targets.
-5. Export the result in the format needed by your deployment.
+4. Mark rows as ignored when they intentionally do not need a target.
+5. Save targets.
+6. Export the result in the format needed by your deployment.
 
 Targets can be either site-relative paths such as `/new-page` or absolute `http` / `https` URLs. Empty targets are allowed while drafting; CSV and JSON exports keep them empty, while `.htaccess` and Nginx exports use `NEW_URL` as a deployment placeholder.
+
+Ignored rows are saved as admin review state and no longer receive the missing-target highlight. Ignoring a row does not change export behavior; use the export filters when you want to exclude unmapped rows.
 
 ## Import and Export
 
@@ -42,6 +45,7 @@ The plugin stores scan results and target mappings in WordPress options:
 
 - `elk_301_migrator_scan`
 - `elk_301_migrator_targets`
+- `elk_301_migrator_ignored`
 
 The plugin does not create database tables.
 
