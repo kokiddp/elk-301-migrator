@@ -12,7 +12,7 @@
  * Plugin Name:       ELK 301 Migrator
  * Plugin URI:        https://www.elk-lab.com
  * Description:       Scans the site for all public URLs and generates a 301 redirection table ready to be compiled and used.
- * Version:           1.0.0
+ * Version:           1.1.0
  * Requires at least: 5.2
  * Requires PHP:      7.4
  * Author:            Gabriele Coquillard @ ELK-Lab

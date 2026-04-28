@@ -28,11 +28,17 @@ find . -name '*.php' -print0 | xargs -0 -n1 php -l
 For behavior changes, test these flows manually:
 
 - Run a scan with and without attachment filters.
+- If WPML, Polylang, or another translation plugin is active, run a scan and confirm translated posts, terms, and translated media URLs are added without duplicate rows for untranslated content.
 - Save, clear, and update target URLs.
 - Mark and unmark ignored rows without a target.
 - Import a JSON export.
 - Export CSV, JSON, `.htaccess`, and Nginx formats.
 - Confirm identity redirects can be excluded.
+
+For multilingual scan changes:
+
+- Prefer plugin APIs that resolve real translated objects instead of guessing translated slugs.
+- Use `elk_301_migrator_translated_url` for per-language URL overrides and `elk_301_migrator_url_variants` when a plugin needs full control over the emitted scan rows.
 
 ## License
 

@@ -27,21 +27,39 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
     ];
 
     $home_url = home_url( '/' );
-    $groups['front'][] = [
-        'url'   => $home_url,
-        'label' => __( 'Home', 'elk-301-migrator' ),
-        'type'  => 'front',
-    ];
+    $groups['front'] = array_merge(
+        $groups['front'],
+        elk_301_migrator_collect_url_variants(
+            [
+                'url'   => $home_url,
+                'label' => __( 'Home', 'elk-301-migrator' ),
+                'type'  => 'front',
+            ],
+            [
+                'kind' => 'front_page',
+            ]
+        )
+    );
 
     $blog_page_id = (int) get_option( 'page_for_posts' );
     if ( $blog_page_id > 0 ) {
         $blog_url = get_permalink( $blog_page_id );
         if ( $blog_url && $blog_url !== $home_url ) {
-            $groups['front'][] = [
-                'url'   => $blog_url,
-                'label' => __( 'Posts page', 'elk-301-migrator' ),
-                'type'  => 'front',
-            ];
+            $groups['front'] = array_merge(
+                $groups['front'],
+                elk_301_migrator_collect_url_variants(
+                    [
+                        'url'   => $blog_url,
+                        'label' => __( 'Posts page', 'elk-301-migrator' ),
+                        'type'  => 'front',
+                    ],
+                    [
+                        'kind'      => 'page_for_posts',
+                        'post_id'   => $blog_page_id,
+                        'post_type' => 'page',
+                    ]
+                )
+            );
         }
     }
 
@@ -74,11 +92,21 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
                     continue;
                 }
 
-                $groups['post_types'][] = [
-                    'url'   => $permalink,
-                    'label' => sprintf( '[%s] %s', $post_type->labels->singular_name, get_the_title( $post_id ) ),
-                    'type'  => 'post:' . $post_type->name,
-                ];
+                $groups['post_types'] = array_merge(
+                    $groups['post_types'],
+                    elk_301_migrator_collect_url_variants(
+                        [
+                            'url'   => $permalink,
+                            'label' => sprintf( '[%s] %s', $post_type->labels->singular_name, get_the_title( $post_id ) ),
+                            'type'  => 'post:' . $post_type->name,
+                        ],
+                        [
+                            'kind'      => 'post',
+                            'post_id'   => (int) $post_id,
+                            'post_type' => $post_type->name,
+                        ]
+                    )
+                );
             }
 
             $page++;
@@ -87,11 +115,20 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
         if ( $post_type->has_archive && $post_type->name !== 'post' ) {
             $archive_link = get_post_type_archive_link( $post_type->name );
             if ( $archive_link ) {
-                $groups['archives'][] = [
-                    'url'   => $archive_link,
-                    'label' => sprintf( __( 'Archive: %s', 'elk-301-migrator' ), $post_type->labels->name ),
-                    'type'  => 'archive:' . $post_type->name,
-                ];
+                $groups['archives'] = array_merge(
+                    $groups['archives'],
+                    elk_301_migrator_collect_url_variants(
+                        [
+                            'url'   => $archive_link,
+                            'label' => sprintf( __( 'Archive: %s', 'elk-301-migrator' ), $post_type->labels->name ),
+                            'type'  => 'archive:' . $post_type->name,
+                        ],
+                        [
+                            'kind'      => 'post_type_archive',
+                            'post_type' => $post_type->name,
+                        ]
+                    )
+                );
             }
         }
     }
@@ -120,11 +157,21 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
                     continue;
                 }
 
-                $groups['taxonomies'][] = [
-                    'url'   => $term_link,
-                    'label' => sprintf( '[%s] %s', $taxonomy->labels->singular_name, $term->name ),
-                    'type'  => 'term:' . $taxonomy->name,
-                ];
+                $groups['taxonomies'] = array_merge(
+                    $groups['taxonomies'],
+                    elk_301_migrator_collect_url_variants(
+                        [
+                            'url'   => $term_link,
+                            'label' => sprintf( '[%s] %s', $taxonomy->labels->singular_name, $term->name ),
+                            'type'  => 'term:' . $taxonomy->name,
+                        ],
+                        [
+                            'kind'     => 'term',
+                            'term_id'  => (int) $term->term_id,
+                            'taxonomy' => $taxonomy->name,
+                        ]
+                    )
+                );
             }
 
             $offset += ELK_301_MIGRATOR_SCAN_BATCH;
@@ -142,11 +189,20 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
             continue;
         }
 
-        $groups['authors'][] = [
-            'url'   => $author_url,
-            'label' => sprintf( __( 'Author: %s', 'elk-301-migrator' ), $author->display_name ),
-            'type'  => 'author',
-        ];
+        $groups['authors'] = array_merge(
+            $groups['authors'],
+            elk_301_migrator_collect_url_variants(
+                [
+                    'url'   => $author_url,
+                    'label' => sprintf( __( 'Author: %s', 'elk-301-migrator' ), $author->display_name ),
+                    'type'  => 'author',
+                ],
+                [
+                    'kind'      => 'author',
+                    'author_id' => (int) $author->ID,
+                ]
+            )
+        );
     }
 
     $groups['attachments'] = elk_301_migrator_collect_attachments( $filters );
@@ -156,6 +212,346 @@ function elk_301_migrator_collect_urls( array $filters = [] ): array {
     }
 
     return $groups;
+}
+
+/**
+ * Expand a scanned item into translated URL variants when a multilingual plugin is active.
+ *
+ * @param array{url: string, label: string, type: string} $item
+ * @param array<string, mixed>                            $context
+ * @return array<int, array{url: string, label: string, type: string}>
+ */
+function elk_301_migrator_collect_url_variants( array $item, array $context = [] ): array {
+    $variants  = [ $item ];
+    $languages = elk_301_migrator_get_translation_languages();
+
+    foreach ( $languages as $language_code => $language_label ) {
+        $translated_url = elk_301_migrator_translate_url_for_language( $item['url'], $context, $language_code );
+        if ( ! is_string( $translated_url ) || $translated_url === '' ) {
+            continue;
+        }
+
+        $variants[] = [
+            'url'   => $translated_url,
+            'label' => $translated_url === $item['url'] ? $item['label'] : elk_301_migrator_label_with_language( $item['label'], $language_label ?: $language_code ),
+            'type'  => $item['type'],
+        ];
+    }
+
+    $filtered = apply_filters( 'elk_301_migrator_url_variants', $variants, $item, $context );
+
+    return elk_301_migrator_normalize_url_variants( $filtered, $item );
+}
+
+/**
+ * Return the active multilingual languages keyed by language code.
+ *
+ * @return array<string, string>
+ */
+function elk_301_migrator_get_translation_languages(): array {
+    static $languages = null;
+
+    if ( $languages !== null ) {
+        return $languages;
+    }
+
+    $languages = [];
+
+    $wpml_languages = apply_filters(
+        'wpml_active_languages',
+        null,
+        [
+            'skip_missing' => 0,
+            'orderby'      => 'code',
+        ]
+    );
+
+    if ( is_array( $wpml_languages ) ) {
+        foreach ( $wpml_languages as $language ) {
+            if ( ! is_array( $language ) || empty( $language['code'] ) ) {
+                continue;
+            }
+
+            $code              = (string) $language['code'];
+            $languages[ $code ] = ! empty( $language['native_name'] ) ? (string) $language['native_name'] : $code;
+        }
+    }
+
+    if ( function_exists( 'pll_languages_list' ) ) {
+        $polylang_languages = pll_languages_list( [ 'fields' => 'slug' ] );
+        if ( is_array( $polylang_languages ) ) {
+            foreach ( $polylang_languages as $language_code ) {
+                if ( ! is_scalar( $language_code ) ) {
+                    continue;
+                }
+
+                $code = (string) $language_code;
+                if ( $code === '' || isset( $languages[ $code ] ) ) {
+                    continue;
+                }
+
+                $languages[ $code ] = $code;
+            }
+        }
+    }
+
+    $filtered = apply_filters( 'elk_301_migrator_translation_languages', $languages );
+    if ( is_array( $filtered ) ) {
+        $languages = [];
+        foreach ( $filtered as $code => $label ) {
+            if ( is_int( $code ) ) {
+                if ( ! is_scalar( $label ) ) {
+                    continue;
+                }
+
+                $normalized_code  = trim( (string) $label );
+                $normalized_label = $normalized_code;
+            } else {
+                if ( ! is_scalar( $code ) ) {
+                    continue;
+                }
+
+                $normalized_code  = trim( (string) $code );
+                $normalized_label = is_scalar( $label ) && (string) $label !== '' ? (string) $label : $normalized_code;
+            }
+
+            if ( $normalized_code === '' ) {
+                continue;
+            }
+
+            $languages[ $normalized_code ] = $normalized_label;
+        }
+    }
+
+    return $languages;
+}
+
+/**
+ * Translate a scanned URL for a specific language.
+ *
+ * @param array<string, mixed> $context
+ */
+function elk_301_migrator_translate_url_for_language( string $url, array $context, string $language_code ): ?string {
+    $kind = isset( $context['kind'] ) && is_string( $context['kind'] ) ? $context['kind'] : '';
+
+    $filtered_url = apply_filters( 'elk_301_migrator_translated_url', null, $url, $context, $language_code );
+    if ( is_string( $filtered_url ) && $filtered_url !== '' ) {
+        return $filtered_url;
+    }
+
+    if ( $kind === 'front_page' ) {
+        $translated_home = elk_301_migrator_translate_home_url( $language_code );
+        if ( $translated_home !== null ) {
+            return $translated_home;
+        }
+    }
+
+    if ( in_array( $kind, [ 'post', 'page_for_posts' ], true ) ) {
+        $post_id   = isset( $context['post_id'] ) ? (int) $context['post_id'] : 0;
+        $post_type = isset( $context['post_type'] ) && is_string( $context['post_type'] ) ? $context['post_type'] : 'post';
+        if ( $post_id > 0 ) {
+            $translated_post_id = elk_301_migrator_translate_post_id( $post_id, $post_type, $language_code );
+            if ( $translated_post_id > 0 ) {
+                $translated_url = get_permalink( $translated_post_id );
+                if ( is_string( $translated_url ) && $translated_url !== '' ) {
+                    return $translated_url;
+                }
+            }
+
+            return null;
+        }
+    }
+
+    if ( $kind === 'term' ) {
+        $term_id   = isset( $context['term_id'] ) ? (int) $context['term_id'] : 0;
+        $taxonomy  = isset( $context['taxonomy'] ) && is_string( $context['taxonomy'] ) ? $context['taxonomy'] : '';
+        if ( $term_id > 0 && $taxonomy !== '' ) {
+            $translated_term_id = elk_301_migrator_translate_term_id( $term_id, $taxonomy, $language_code );
+            if ( $translated_term_id > 0 ) {
+                $term = get_term( $translated_term_id, $taxonomy );
+                if ( $term instanceof WP_Term ) {
+                    $translated_url = get_term_link( $term );
+                    if ( ! is_wp_error( $translated_url ) && is_string( $translated_url ) && $translated_url !== '' ) {
+                        return $translated_url;
+                    }
+                }
+            }
+
+            return null;
+        }
+    }
+
+    if ( $kind === 'attachment' ) {
+        $attachment_id = isset( $context['attachment_id'] ) ? (int) $context['attachment_id'] : 0;
+        if ( $attachment_id > 0 ) {
+            $translated_attachment_url = elk_301_migrator_translate_attachment_url( $attachment_id, $language_code );
+            if ( $translated_attachment_url !== null ) {
+                return $translated_attachment_url;
+            }
+
+            return null;
+        }
+    }
+
+    return elk_301_migrator_translate_raw_url( $url, $language_code );
+}
+
+function elk_301_migrator_translate_post_id( int $post_id, string $post_type, string $language_code ): int {
+    if ( function_exists( 'pll_get_post' ) ) {
+        $translated_post_id = pll_get_post( $post_id, $language_code );
+        if ( is_numeric( $translated_post_id ) && (int) $translated_post_id > 0 ) {
+            return (int) $translated_post_id;
+        }
+    }
+
+    if ( defined( 'ICL_SITEPRESS_VERSION' ) || has_filter( 'wpml_object_id' ) ) {
+        $wpml_types = [ $post_type ];
+        if ( $post_type === 'attachment' ) {
+            $wpml_types[] = 'post_attachment';
+        }
+
+        foreach ( array_unique( $wpml_types ) as $wpml_type ) {
+            $translated_post_id = apply_filters( 'wpml_object_id', $post_id, $wpml_type, true, $language_code );
+            if ( is_numeric( $translated_post_id ) && (int) $translated_post_id > 0 ) {
+                return (int) $translated_post_id;
+            }
+        }
+    }
+
+    return 0;
+}
+
+function elk_301_migrator_translate_term_id( int $term_id, string $taxonomy, string $language_code ): int {
+    if ( function_exists( 'pll_get_term' ) ) {
+        $translated_term_id = pll_get_term( $term_id, $language_code );
+        if ( is_numeric( $translated_term_id ) && (int) $translated_term_id > 0 ) {
+            return (int) $translated_term_id;
+        }
+    }
+
+    if ( defined( 'ICL_SITEPRESS_VERSION' ) || has_filter( 'wpml_object_id' ) ) {
+        $translated_term_id = apply_filters( 'wpml_object_id', $term_id, $taxonomy, true, $language_code );
+        if ( is_numeric( $translated_term_id ) && (int) $translated_term_id > 0 ) {
+            return (int) $translated_term_id;
+        }
+    }
+
+    return 0;
+}
+
+function elk_301_migrator_translate_attachment_url( int $attachment_id, string $language_code ): ?string {
+    $translated_attachment_id = elk_301_migrator_translate_post_id( $attachment_id, 'attachment', $language_code );
+    if ( $translated_attachment_id <= 0 ) {
+        return null;
+    }
+
+    $translated_url = wp_get_attachment_url( $translated_attachment_id );
+    if ( ! is_string( $translated_url ) || $translated_url === '' ) {
+        return null;
+    }
+
+    return $translated_url;
+}
+
+function elk_301_migrator_translate_home_url( string $language_code ): ?string {
+    if ( function_exists( 'pll_home_url' ) ) {
+        $translated_home = pll_home_url( $language_code );
+        if ( is_string( $translated_home ) && $translated_home !== '' ) {
+            return $translated_home;
+        }
+    }
+
+    return elk_301_migrator_translate_raw_url( home_url( '/' ), $language_code );
+}
+
+function elk_301_migrator_translate_raw_url( string $url, string $language_code ): ?string {
+    $wpml_url = null;
+    if ( defined( 'ICL_SITEPRESS_VERSION' ) || has_filter( 'wpml_permalink' ) ) {
+        $wpml_url = apply_filters( 'wpml_permalink', $url, $language_code, true );
+    }
+
+    if ( is_string( $wpml_url ) && $wpml_url !== '' ) {
+        return $wpml_url;
+    }
+
+    if ( function_exists( 'pll_home_url' ) ) {
+        $relative = elk_301_migrator_to_site_relative( $url );
+        if ( $relative !== null ) {
+            $translated_home = pll_home_url( $language_code );
+            if ( is_string( $translated_home ) && $translated_home !== '' ) {
+                return elk_301_migrator_join_home_and_relative( $translated_home, $relative );
+            }
+        }
+    }
+
+    return null;
+}
+
+function elk_301_migrator_join_home_and_relative( string $home, string $relative ): string {
+    $query = '';
+    if ( strpos( $relative, '?' ) !== false ) {
+        list( $relative, $query ) = explode( '?', $relative, 2 );
+    }
+
+    $home     = trailingslashit( untrailingslashit( $home ) );
+    $relative = ltrim( $relative, '/' );
+    $joined   = $relative === '' ? $home : $home . $relative;
+
+    if ( $query !== '' ) {
+        $joined .= '?' . $query;
+    }
+
+    return $joined;
+}
+
+function elk_301_migrator_label_with_language( string $label, string $language_label ): string {
+    return sprintf( __( '%1$s (%2$s)', 'elk-301-migrator' ), $label, $language_label );
+}
+
+/**
+ * @param mixed                                   $items
+ * @param array{url: string, label: string, type: string} $fallback_item
+ * @return array<int, array{url: string, label: string, type: string}>
+ */
+function elk_301_migrator_normalize_url_variants( $items, array $fallback_item ): array {
+    if ( ! is_array( $items ) ) {
+        return [ $fallback_item ];
+    }
+
+    $normalized = [];
+
+    foreach ( $items as $item ) {
+        if ( ! is_array( $item ) || ! isset( $item['url'] ) ) {
+            continue;
+        }
+
+        $url = trim( (string) $item['url'] );
+        if ( $url === '' ) {
+            continue;
+        }
+
+        if ( $url[0] === '/' && substr( $url, 0, 2 ) !== '//' ) {
+            $normalized_url = $url;
+        } else {
+            $normalized_url = esc_url_raw( $url );
+        }
+
+        if ( $normalized_url === '' ) {
+            continue;
+        }
+
+        $normalized[] = [
+            'url'   => $normalized_url,
+            'label' => isset( $item['label'] ) && is_scalar( $item['label'] ) ? (string) $item['label'] : $fallback_item['label'],
+            'type'  => isset( $item['type'] ) && is_scalar( $item['type'] ) ? (string) $item['type'] : $fallback_item['type'],
+        ];
+    }
+
+    if ( ! $normalized ) {
+        return [ $fallback_item ];
+    }
+
+    return $normalized;
 }
 
 /**
@@ -233,11 +629,22 @@ function elk_301_migrator_collect_attachments( array $filters ): array {
                 }
             }
 
-            $result[] = [
-                'url'   => $attachment_url,
-                'label' => get_the_title( $attachment_id ),
-                'type'  => 'attachment',
-            ];
+            $result = array_merge(
+                $result,
+                elk_301_migrator_collect_url_variants(
+                    [
+                        'url'   => $attachment_url,
+                        'label' => get_the_title( $attachment_id ),
+                        'type'  => 'attachment',
+                    ],
+                    [
+                        'kind'          => 'attachment',
+                        'attachment_id' => (int) $attachment_id,
+                        'post_id'       => (int) $attachment_id,
+                        'post_type'     => 'attachment',
+                    ]
+                )
+            );
         }
 
         $page++;

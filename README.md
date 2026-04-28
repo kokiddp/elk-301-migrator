@@ -4,6 +4,8 @@ ELK 301 Migrator is a WordPress admin tool for building a migration redirect tab
 
 It scans public posts, pages, custom post types, taxonomy terms, post type archives, author archives, the front/blog pages, and media attachments. You can then fill target URLs, import/export mappings, and download redirect outputs for CSV, JSON, Apache `.htaccess`, or Nginx.
 
+When WPML or Polylang is active, the scan also expands supported sources into language-specific public URLs so you can build redirects per locale instead of only from the current language view.
+
 ## Requirements
 
 - WordPress 5.2 or newer
@@ -19,11 +21,12 @@ It scans public posts, pages, custom post types, taxonomy terms, post type archi
 ## Usage
 
 1. Run a scan.
-2. Optionally limit attachments by upload month and file extension.
-3. Fill the target URL column for rows that should redirect.
-4. Mark rows as ignored when they intentionally do not need a target.
-5. Save targets.
-6. Export the result in the format needed by your deployment.
+2. If you use a translation plugin, re-run the scan after changing languages, translated content, or translated media.
+3. Optionally limit attachments by upload month and file extension.
+4. Fill the target URL column for rows that should redirect.
+5. Mark rows as ignored when they intentionally do not need a target.
+6. Save targets.
+7. Export the result in the format needed by your deployment.
 
 Targets can be either site-relative paths such as `/new-page` or absolute `http` / `https` URLs. Empty targets are allowed while drafting; CSV and JSON exports keep them empty, while `.htaccess` and Nginx exports use `NEW_URL` as a deployment placeholder.
 
@@ -48,6 +51,13 @@ The plugin stores scan results and target mappings in WordPress options:
 - `elk_301_migrator_ignored`
 
 The plugin does not create database tables.
+
+## Multilingual Support
+
+- WPML and Polylang expand translated posts, pages, terms, the posts page, and translated attachment file URLs when real translated objects exist.
+- The home page, archives, and author URLs are expanded on a best-effort basis using the translation plugin's permalink APIs or language home URLs.
+- The scan deduplicates identical URLs automatically, so untranslated items stay single-row even when multiple languages are configured.
+- Other translation plugins can extend the scanner with `elk_301_migrator_translation_languages`, `elk_301_migrator_translated_url`, and `elk_301_migrator_url_variants`.
 
 ## License
 
